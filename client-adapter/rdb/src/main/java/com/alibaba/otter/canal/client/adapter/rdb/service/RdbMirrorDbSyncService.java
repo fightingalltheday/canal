@@ -9,6 +9,7 @@ import java.util.Map;
 
 import javax.sql.DataSource;
 
+import com.google.common.base.Strings;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +20,9 @@ import com.alibaba.otter.canal.client.adapter.rdb.config.MappingConfig;
 import com.alibaba.otter.canal.client.adapter.rdb.config.MirrorDbConfig;
 import com.alibaba.otter.canal.client.adapter.rdb.support.SingleDml;
 import com.alibaba.otter.canal.client.adapter.support.Dml;
+
+import static com.alibaba.otter.canal.client.adapter.support.Constant.STRING_BACK_QUOTE;
+import static com.alibaba.otter.canal.client.adapter.support.Constant.STRING_DOT;
 
 /**
  * RDB镜像库同步操作业务
@@ -122,6 +126,8 @@ public class RdbMirrorDbSyncService {
     private void initMappingConfig(String key, MappingConfig baseConfigMap, MirrorDbConfig mirrorDbConfig, Dml dml) {
         MappingConfig mappingConfig = mirrorDbConfig.getTableConfig().get(key);
         if (mappingConfig == null) {
+            String targetDb = mirrorDbConfig.getMappingConfig().getDbMapping().getTargetDb();
+
             // 构造表配置
             mappingConfig = new MappingConfig();
             mappingConfig.setDataSourceKey(baseConfigMap.getDataSourceKey());
@@ -133,7 +139,13 @@ public class RdbMirrorDbSyncService {
             mappingConfig.setDbMapping(dbMapping);
             dbMapping.setDatabase(dml.getDatabase());
             dbMapping.setTable(dml.getTable());
-            dbMapping.setTargetDb(dml.getDatabase());
+            // mirrorDb只能在相同Scheme下映射表数据，无法配置多个数据库汇集到单个数据库，调整成不同Scheme相同表映射
+//            dbMapping.setTargetDb(dml.getDatabase());
+            if (!Strings.isNullOrEmpty(targetDb)) {
+                // 解决库名中若出现 ‘-’ 造成DML语句非法, 统一加上符号'`'
+                targetDb = STRING_BACK_QUOTE.concat(targetDb).concat(STRING_BACK_QUOTE);
+            }
+            dbMapping.setTargetDb(targetDb);
             dbMapping.setTargetTable(dml.getTable());
             dbMapping.setMapAll(true);
             List<String> pkNames = dml.getPkNames();
@@ -152,11 +164,30 @@ public class RdbMirrorDbSyncService {
      */
     private void executeDdl(MirrorDbConfig mirrorDbConfig, Dml ddl) {
         try (Connection conn = dataSource.getConnection(); Statement statement = conn.createStatement()) {
+            String targetDb = mirrorDbConfig.getMappingConfig().getDbMapping().getTargetDb();
+            String database = ddl.getDatabase();
+
+            logger.warn("targetDb: {}", targetDb);
+            logger.warn("mirrorDbConfig: {}", JSON.toJSONString(mirrorDbConfig));
+
+            //mirrorDb只能在相同Scheme下映射表数据，无法配置多个数据库汇集到单个数据库，调整成不同Scheme相同表映射
+            if (!ddl.getDatabase().equals(targetDb)) {
+                String originSql = ddl.getSql();
+
+                String replaceSql = StringUtils.replace(originSql,
+                        STRING_BACK_QUOTE.concat(ddl.getDatabase()).concat(STRING_BACK_QUOTE).concat(STRING_DOT),
+                        STRING_BACK_QUOTE.concat(targetDb).concat(STRING_BACK_QUOTE).concat(STRING_DOT)
+                );
+
+                database = targetDb;
+                ddl.setSql(replaceSql);
+            }
+
             statement.execute(ddl.getSql());
             // 移除对应配置
             mirrorDbConfig.getTableConfig().remove(ddl.getTable());
             if (logger.isTraceEnabled()) {
-                logger.trace("Execute DDL sql: {} for database: {}", ddl.getSql(), ddl.getDatabase());
+                logger.trace("Execute DDL sql: {} for database: {}", ddl.getSql(), database);
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
