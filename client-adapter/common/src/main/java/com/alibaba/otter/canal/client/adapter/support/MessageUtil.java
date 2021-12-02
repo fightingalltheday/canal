@@ -6,6 +6,8 @@ import com.alibaba.otter.canal.protocol.CanalEntry;
 import com.alibaba.otter.canal.protocol.FlatMessage;
 import com.alibaba.otter.canal.protocol.Message;
 
+import static com.alibaba.otter.canal.client.adapter.support.Constant.STRING_BACK_QUOTE;
+
 /**
  * Message对象解析工具类
  *
@@ -163,16 +165,16 @@ public class MessageUtil {
         // }
         List<Map<String, String>> data = flatMessage.getData();
         if (data != null) {
-            dml.setData(changeRows(dml.getTable(), data, flatMessage.getSqlType(), flatMessage.getMysqlType()));
+            dml.setData(changeRows(dml.getTable(), dml.getPkNames(), data, flatMessage.getSqlType(), flatMessage.getMysqlType()));
         }
         List<Map<String, String>> old = flatMessage.getOld();
         if (old != null) {
-            dml.setOld(changeRows(dml.getTable(), old, flatMessage.getSqlType(), flatMessage.getMysqlType()));
+            dml.setOld(changeRows(dml.getTable(), dml.getPkNames(), old, flatMessage.getSqlType(), flatMessage.getMysqlType()));
         }
         return dml;
     }
 
-    private static List<Map<String, Object>> changeRows(String table, List<Map<String, String>> rows,
+    private static List<Map<String, Object>> changeRows(String table, List<String> pkNames, List<Map<String, String>> rows,
                                                         Map<String, Integer> sqlTypes, Map<String, String> mysqlTypes) {
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, String> row : rows) {
@@ -192,7 +194,13 @@ public class MessageUtil {
                 }
 
                 Object finalValue = JdbcTypeUtil.typeConvert(table, columnName, columnValue, sqlType, mysqlType);
+//                resultRow.put(columnName, finalValue);
+                // 解决表中的列名存在关键字导致无法正常执行DML语句
+                if (!pkNames.contains(columnName) && !columnName.contains(STRING_BACK_QUOTE)) {
+                    columnName = STRING_BACK_QUOTE.concat(columnName).concat(STRING_BACK_QUOTE);
+                }
                 resultRow.put(columnName, finalValue);
+
             }
             result.add(resultRow);
         }
